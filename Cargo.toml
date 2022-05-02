@@ -1,0 +1,10 @@
+[package]
+name = "asciime"
+version = "0.1.0"
+edition = "2021"
+authors = ["Wolf Honoré <wolfhonore@gmail.com>"]
+description = "An ASCII art webcam filter."
+repository = "https://github.com/whonore/asciime"
+license = "MIT"
+keywords = ["webcam filter", "ascii art", "v4l2"]
+categories = ["command-line-utilities", "multimedia::video"]
