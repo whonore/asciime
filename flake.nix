@@ -13,7 +13,9 @@ rec {
       pname = "asciime";
       version = "0.1.0";
       src = pkgs.lib.cleanSource ./.;
-      cargoSha256 = "sha256-tOaeI6J4M92g2KPZmb9/Xd9oeQczz+ydj0Riwh0wPdc=";
+      cargoSha256 = "sha256-zKJMTxB7/LNvHHoAovFpLH17+6R+nvhUf1rgK8AWQH0=";
+
+      nativeBuildInputs = [pkgs.rustPlatform.bindgenHook];
 
       meta = with pkgs.lib; {
         inherit description;

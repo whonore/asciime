@@ -8,3 +8,11 @@ repository = "https://github.com/whonore/asciime"
 license = "MIT"
 keywords = ["webcam filter", "ascii art", "v4l2"]
 categories = ["command-line-utilities", "multimedia::video"]
+
+[dependencies]
+anyhow = "1.0.57"
+image = "0.24.2"
+imageproc = "0.23.0"
+itertools = "0.10.3"
+rusttype = "0.9.2"
+v4l = "0.12.1"
