@@ -43,7 +43,20 @@ const FONT_SCALE: f32 = 20.0;
 const AVG_GROUP_SIZE: u32 = 10;
 
 #[derive(Debug)]
-struct GlyphMap(HashMap<char, ScaledGlyph<'static>>);
+struct RenderedGlyph(Vec<(u32, u32, Brightness)>);
+
+impl RenderedGlyph {
+    fn new(glyph: ScaledGlyph<'_>) -> Self {
+        let mut pts = vec![];
+        glyph.positioned(point(0.0, 0.0)).draw(|x, y, v| {
+            pts.push((x, y, Brightness::from(v)));
+        });
+        Self(pts)
+    }
+}
+
+#[derive(Debug)]
+struct GlyphMap(HashMap<char, RenderedGlyph>);
 
 impl GlyphMap {
     fn new(font: &'static [u8], scale: f32, chars: &[char]) -> anyhow::Result<Self> {
@@ -52,7 +65,7 @@ impl GlyphMap {
         Ok(Self(
             chars
                 .iter()
-                .map(|&c| (c, font.glyph(c).scaled(scale)))
+                .map(|&c| (c, RenderedGlyph::new(font.glyph(c).scaled(scale))))
                 .collect(),
         ))
     }
@@ -249,18 +262,13 @@ impl FrameFilter for AsciiFilter<'_, '_> {
                 (
                     x,
                     y,
-                    self.glyphs
-                        .0
-                        .get(&pix.as_ascii(self.ascii_map))
-                        .cloned()
-                        .unwrap()
-                        .positioned(point(x as f32, y as f32)),
+                    self.glyphs.0.get(&pix.as_ascii(self.ascii_map)).unwrap(),
                 )
             })
             .for_each(|(xmin, ymin, glyph)| {
-                glyph.draw(|x, y, v| {
-                    out_frame.pixels.set_brightness(x + xmin, y + ymin, v);
-                });
+                for (x, y, v) in &glyph.0 {
+                    out_frame.pixels.set_brightness(x + xmin, y + ymin, *v);
+                }
             });
         out_frame
     }
