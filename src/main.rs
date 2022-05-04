@@ -1,3 +1,15 @@
+#![warn(deprecated_in_future)]
+#![warn(future_incompatible)]
+#![warn(nonstandard_style)]
+#![warn(rust_2018_compatibility)]
+#![warn(rust_2018_idioms)]
+#![warn(trivial_casts, trivial_numeric_casts)]
+#![warn(unused)]
+#![warn(clippy::all, clippy::pedantic)]
+#![warn(clippy::missing_const_for_fn)]
+#![warn(clippy::use_self)]
+#![warn(clippy::if_then_some_else_none)]
+
 use std::cmp;
 use std::collections::HashMap;
 use std::ops::Index;
@@ -36,6 +48,11 @@ struct AsciiMap {
 }
 
 impl AsciiMap {
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_precision_loss,
+        clippy::cast_sign_loss
+    )]
     fn new(map: &'static [char]) -> Self {
         let nbits = (map.len() as f32).log2() as u32;
         debug_assert!(
@@ -65,12 +82,13 @@ impl Index<Brightness> for AsciiMap {
 struct Brightness(u8);
 
 impl Brightness {
-    fn as_ascii(&self, map: &AsciiMap) -> char {
-        map[*self]
+    fn as_ascii(self, map: &AsciiMap) -> char {
+        map[self]
     }
 }
 
 impl From<f32> for Brightness {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     fn from(b: f32) -> Self {
         // debug_assert!((0.0..=1.0).contains(&b), "b={}", &b);
         Self((b * 255.0).clamp(0.0, 255.0) as u8)
@@ -89,7 +107,7 @@ impl Yuyv {
         Self { buf, width, height }
     }
 
-    fn iter_avg(&self, group_sz: u32) -> IterAvg {
+    const fn iter_avg(&self, group_sz: u32) -> IterAvg<'_> {
         IterAvg::new(self, group_sz)
     }
 
@@ -111,7 +129,7 @@ impl Yuyv {
     // 0       1       2       3
     // Y1 U1/2 Y2 V1/2 Y3 U3/4 Y4 V3/4      0
     // Y5 U5/6 Y6 V5/6 Y7 U7/8 Y8 V7/8      1
-    fn xy_to_idx(&self, x: u32, y: u32) -> usize {
+    const fn xy_to_idx(&self, x: u32, y: u32) -> usize {
         (2 * (y * self.width + x)) as usize
     }
 }
@@ -126,7 +144,7 @@ struct IterAvg<'pix> {
 }
 
 impl<'pix> IterAvg<'pix> {
-    fn new(pixels: &'pix Yuyv, group_sz: u32) -> Self {
+    const fn new(pixels: &'pix Yuyv, group_sz: u32) -> Self {
         Self {
             pixels,
             group_sz,
@@ -140,6 +158,7 @@ impl<'pix> IterAvg<'pix> {
 impl<'pix> Iterator for IterAvg<'pix> {
     type Item = (u32, u32, Brightness);
 
+    #[allow(clippy::cast_possible_truncation)]
     fn next(&mut self) -> Option<Self::Item> {
         if self.done {
             None
@@ -149,7 +168,7 @@ impl<'pix> Iterator for IterAvg<'pix> {
             let npix = (next_x - self.x) * (next_y - self.y);
             let avg = (self.x..next_x)
                 .cartesian_product(self.y..next_y)
-                .map(|(x, y)| self.pixels.get_brightness(x, y).0 as u32)
+                .map(|(x, y)| u32::from(self.pixels.get_brightness(x, y).0))
                 .sum::<u32>()
                 / npix;
             debug_assert!(avg <= u8::MAX.into(), "avg={}", avg);
@@ -190,6 +209,7 @@ impl<'ascii, 'glyph> Frame<'ascii, 'glyph> {
         }
     }
 
+    #[allow(clippy::cast_precision_loss)]
     fn process(&self) -> Self {
         let mut frame = self.clone();
         self.pixels
@@ -208,7 +228,7 @@ impl<'ascii, 'glyph> Frame<'ascii, 'glyph> {
             .for_each(|(xmin, ymin, glyph)| {
                 glyph.draw(|x, y, v| {
                     frame.pixels.set_brightness(x + xmin, y + ymin, v);
-                })
+                });
             });
         frame
     }
