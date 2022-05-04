@@ -9,6 +9,12 @@ license = "MIT"
 keywords = ["webcam filter", "ascii art", "v4l2"]
 categories = ["command-line-utilities", "multimedia::video"]
 
+[lib]
+name = "asciime_filter"
+
+[[bin]]
+name = "asciime"
+
 [dependencies]
 anyhow = "1.0.57"
 itertools = "0.10.3"
