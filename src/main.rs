@@ -28,6 +28,7 @@ use v4l::{
     video::{Capture, Output},
 };
 
+// TODO: Add more options
 // $@B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/\|()1{}[]?-_+~<>i!lI;:,"^`'.
 const ASCII_MAP_64: [char; 64] = [
     '$', '@', 'B', '%', '&', 'W', 'M', '#', '*', 'o', 'h', 'k', 'b', 'd', 'p', 'q', 'w', 'm', 'Z',
@@ -35,11 +36,27 @@ const ASCII_MAP_64: [char; 64] = [
     '(', ')', '1', '{', '}', '[', ']', '?', '-', '_', '+', '~', '<', '>', 'i', '!', 'I', ';', ':',
     ',', '"', '^', '`', '\'', '.', ' ',
 ];
-
+// TODO: Make this an argument
+const FONT: &[u8] = include_bytes!("../font/FiraCode-VF.ttf");
+// TODO: Figure out good values for these
 const FONT_SCALE: f32 = 20.0;
 const AVG_GROUP_SIZE: u32 = 10;
 
-type GlyphMap = HashMap<char, ScaledGlyph<'static>>;
+#[derive(Debug)]
+struct GlyphMap(HashMap<char, ScaledGlyph<'static>>);
+
+impl GlyphMap {
+    fn new(font: &'static [u8], scale: f32, chars: &[char]) -> anyhow::Result<Self> {
+        let font = Font::try_from_bytes(font).context("Failed to load font")?;
+        let scale = Scale::uniform(scale);
+        Ok(Self(
+            chars
+                .iter()
+                .map(|&c| (c, font.glyph(c).scaled(scale)))
+                .collect(),
+        ))
+    }
+}
 
 #[derive(Debug)]
 struct AsciiMap {
@@ -90,7 +107,6 @@ impl Brightness {
 impl From<f32> for Brightness {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     fn from(b: f32) -> Self {
-        // debug_assert!((0.0..=1.0).contains(&b), "b={}", &b);
         Self((b * 255.0).clamp(0.0, 255.0) as u8)
     }
 }
@@ -155,7 +171,7 @@ impl<'pix> IterAvg<'pix> {
     }
 }
 
-impl<'pix> Iterator for IterAvg<'pix> {
+impl Iterator for IterAvg<'_> {
     type Item = (u32, u32, Brightness);
 
     #[allow(clippy::cast_possible_truncation)]
@@ -163,6 +179,8 @@ impl<'pix> Iterator for IterAvg<'pix> {
         if self.done {
             None
         } else {
+            // Average the brightness of the next group_sz pixels in the x and
+            // y directions.
             let next_x = cmp::min(self.x + self.group_sz, self.pixels.width);
             let next_y = cmp::min(self.y + self.group_sz, self.pixels.height);
             let npix = (next_x - self.x) * (next_y - self.y);
@@ -188,37 +206,51 @@ impl<'pix> Iterator for IterAvg<'pix> {
 }
 
 #[derive(Debug, Clone)]
-struct Frame<'ascii, 'glyph> {
+struct Frame {
     pixels: Yuyv,
+}
+
+impl Frame {
+    fn new(buf: Vec<u8>, width: u32, height: u32) -> Self {
+        Self {
+            pixels: Yuyv::new(buf, width, height),
+        }
+    }
+
+    fn as_bytes(&self) -> &[u8] {
+        &self.pixels.buf
+    }
+}
+
+trait FrameFilter {
+    fn process(&self, frame: Frame) -> Frame;
+}
+
+// TODO: Add option for grayscale/color
+struct AsciiFilter<'ascii, 'glyph> {
     ascii_map: &'ascii AsciiMap,
     glyphs: &'glyph GlyphMap,
 }
 
-impl<'ascii, 'glyph> Frame<'ascii, 'glyph> {
-    fn new(
-        buf: Vec<u8>,
-        width: u32,
-        height: u32,
-        ascii_map: &'ascii AsciiMap,
-        glyphs: &'glyph GlyphMap,
-    ) -> Self {
-        Self {
-            pixels: Yuyv::new(buf, width, height),
-            ascii_map,
-            glyphs,
-        }
+impl<'ascii, 'glyph> AsciiFilter<'ascii, 'glyph> {
+    const fn new(ascii_map: &'ascii AsciiMap, glyphs: &'glyph GlyphMap) -> Self {
+        Self { ascii_map, glyphs }
     }
+}
 
+impl FrameFilter for AsciiFilter<'_, '_> {
     #[allow(clippy::cast_precision_loss)]
-    fn process(&self) -> Self {
-        let mut frame = self.clone();
-        self.pixels
+    fn process(&self, in_frame: Frame) -> Frame {
+        let mut out_frame = in_frame.clone();
+        in_frame
+            .pixels
             .iter_avg(AVG_GROUP_SIZE)
             .map(|(x, y, pix)| {
                 (
                     x,
                     y,
                     self.glyphs
+                        .0
                         .get(&pix.as_ascii(self.ascii_map))
                         .cloned()
                         .unwrap()
@@ -227,103 +259,120 @@ impl<'ascii, 'glyph> Frame<'ascii, 'glyph> {
             })
             .for_each(|(xmin, ymin, glyph)| {
                 glyph.draw(|x, y, v| {
-                    frame.pixels.set_brightness(x + xmin, y + ymin, v);
+                    out_frame.pixels.set_brightness(x + xmin, y + ymin, v);
                 });
             });
-        frame
+        out_frame
+    }
+}
+
+struct StreamProcessor<'cap, 'out, 'filt, F> {
+    cap_stream: MmapStream<'cap>,
+    out_stream: MmapStream<'out>,
+    filters: Vec<&'filt F>,
+    width: u32,
+    height: u32,
+}
+
+impl<'filt, F> StreamProcessor<'_, '_, 'filt, F>
+where
+    F: FrameFilter,
+{
+    fn new(source: &str, sink: &str) -> anyhow::Result<Self> {
+        println!(
+            "Using source device: {}\nUsing sink device: {}\n",
+            source, sink
+        );
+
+        // Prepare capture and output devices
+        let cap = Device::with_path(source).context("Failed to open capture device")?;
+        let out = Device::with_path(sink).context("Failed to open output device")?;
+
+        // Confirm capture and output settings match and are valid
+        let mut cap_fmt = Capture::format(&cap).context("Failed to read capture format")?;
+        cap_fmt.fourcc = FourCC::new(b"YUYV");
+        let cap_fmt =
+            Capture::set_format(&cap, &cap_fmt).context("Failed to set capture format")?;
+        let out_fmt = Output::set_format(&out, &cap_fmt).context("Failed to set output format")?;
+
+        if cap_fmt.fourcc.str()? != "YUYV" {
+            return Err(anyhow!("Invalid fourcc: {}", cap_fmt.fourcc.str().unwrap()));
+        }
+
+        if cap_fmt.width != out_fmt.width
+            || cap_fmt.height != out_fmt.height
+            || cap_fmt.fourcc != out_fmt.fourcc
+        {
+            return Err(anyhow!(
+                "Output format does not match capture:\nCapture format: {}\nOutput format: {}",
+                cap_fmt,
+                out_fmt
+            ));
+        }
+
+        println!(
+            "Capture device:\n{}{}{}\nOutput device:\n{}{}{}",
+            cap.query_caps()
+                .context("Failed to read capture capabilities")?,
+            Capture::format(&cap).context("Failed to read capture format")?,
+            Capture::params(&cap).context("Failed to read capture parameters")?,
+            out.query_caps()
+                .context("Failed to read output capabilities")?,
+            Output::format(&out).context("Failed to read output format")?,
+            Output::params(&out).context("Failed to read output parameters")?
+        );
+
+        // Prepare capture and output streams
+        let cap_stream =
+            MmapStream::new(&cap, Type::VideoCapture).context("Failed to open capture stream")?;
+        let out_stream =
+            MmapStream::new(&out, Type::VideoOutput).context("Failed to open output stream")?;
+
+        Ok(Self {
+            cap_stream,
+            out_stream,
+            filters: vec![],
+            width: cap_fmt.width,
+            height: cap_fmt.height,
+        })
     }
 
-    fn as_bytes(&self) -> &[u8] {
-        &self.pixels.buf
+    fn add_filter(mut self, filter: &'filt F) -> Self {
+        self.filters.push(filter);
+        self
+    }
+
+    fn process_frame(&mut self) -> anyhow::Result<()> {
+        // Get the next frame
+        let (buf_in, _) =
+            CaptureStream::next(&mut self.cap_stream).context("Failed to read capture frame")?;
+        let (buf_out, _) =
+            OutputStream::next(&mut self.out_stream).context("Failed to read output frame")?;
+
+        // Process the frame
+        let frame = self.filters.iter().fold(
+            Frame::new(buf_in.to_vec(), self.width, self.height),
+            |frame, filter| filter.process(frame),
+        );
+
+        // Output the processed frame
+        let buf_out = &mut buf_out[..buf_in.len()];
+        buf_out.copy_from_slice(frame.as_bytes());
+        Ok(())
     }
 }
 
 fn main() -> anyhow::Result<()> {
     let ascii_map = AsciiMap::new(&ASCII_MAP_64);
+    let glyphs = GlyphMap::new(FONT, FONT_SCALE, ascii_map.map)?;
 
-    // Load font map
-    let scale = Scale::uniform(FONT_SCALE);
-    let font_data = include_bytes!("../font/FiraCode-VF.ttf");
-    let font = Font::try_from_bytes(font_data).context("Failed to load font")?;
-    let glyphs: GlyphMap = ASCII_MAP_64
-        .iter()
-        .map(|&c| (c, font.glyph(c).scaled(scale)))
-        .collect();
-
-    // Prepare capture and output devices
+    // TODO: Make these arguments
     let source = "/dev/video0";
     let sink = "/dev/video4";
-    println!(
-        "Using source device: {}\nUsing sink device: {}\n",
-        source, sink
-    );
 
-    let cap = Device::with_path(source).context("Failed to open capture device")?;
-    let out = Device::with_path(sink).context("Failed to open output device")?;
-
-    // Confirm capture and output settings match and are valid
-    let mut cap_fmt = Capture::format(&cap).context("Failed to read capture format")?;
-    cap_fmt.fourcc = FourCC::new(b"YUYV");
-    let cap_fmt = Capture::set_format(&cap, &cap_fmt).context("Failed to set capture format")?;
-    let out_fmt = Output::set_format(&out, &cap_fmt).context("Failed to set output format")?;
-
-    if cap_fmt.fourcc.str()? != "YUYV" {
-        return Err(anyhow!("Invalid fourcc: {}", cap_fmt.fourcc.str().unwrap()));
-    }
-
-    if cap_fmt.width != out_fmt.width
-        || cap_fmt.height != out_fmt.height
-        || cap_fmt.fourcc != out_fmt.fourcc
-    {
-        return Err(anyhow!(
-            "Output format does not match capture:\nCapture format: {}\nOutput format: {}",
-            cap_fmt,
-            out_fmt
-        ));
-    }
-
-    println!(
-        "Capture device:\n{}{}{}",
-        cap.query_caps()
-            .context("Failed to read capture capabilities")?,
-        Capture::format(&cap).context("Failed to read capture format")?,
-        Capture::params(&cap).context("Failed to read capture parameters")?
-    );
-
-    println!(
-        "Output device:\n{}{}{}",
-        out.query_caps()
-            .context("Failed to read output capabilities")?,
-        Output::format(&out).context("Failed to read output format")?,
-        Output::params(&out).context("Failed to read output parameters")?
-    );
-
-    // Prepare capture and output streams
-    let mut cap_stream =
-        MmapStream::new(&cap, Type::VideoCapture).context("Failed to open capture stream")?;
-    let mut out_stream =
-        MmapStream::new(&out, Type::VideoOutput).context("Failed to open output stream")?;
-
-    CaptureStream::next(&mut cap_stream).context("Failed to read capture frame")?;
+    let ascii_filter = AsciiFilter::new(&ascii_map, &glyphs);
+    let mut stream = StreamProcessor::new(source, sink)?.add_filter(&ascii_filter);
     loop {
-        // Get the next frame
-        let (buf_in, _) =
-            CaptureStream::next(&mut cap_stream).context("Failed to read capture frame")?;
-        let (buf_out, _) =
-            OutputStream::next(&mut out_stream).context("Failed to read output frame")?;
-
-        // Process the frame
-        let frame = Frame::new(
-            buf_in.to_vec(),
-            cap_fmt.width,
-            cap_fmt.height,
-            &ascii_map,
-            &glyphs,
-        )
-        .process();
-
-        // Output the processed frame
-        let buf_out = &mut buf_out[..buf_in.len()];
-        buf_out.copy_from_slice(frame.as_bytes());
+        stream.process_frame()?;
     }
 }
