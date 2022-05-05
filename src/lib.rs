@@ -110,6 +110,7 @@ impl AsciiMap {
 impl Index<Brightness> for AsciiMap {
     type Output = char;
 
+    #[must_use]
     fn index(&self, idx: Brightness) -> &Self::Output {
         let idx = idx.0 >> (u8::BITS - self.nbits);
         &self.map[idx as usize]
@@ -128,6 +129,7 @@ impl Brightness {
 
 impl From<f32> for Brightness {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    #[must_use]
     fn from(b: f32) -> Self {
         Self((b * 255.0).clamp(0.0, 255.0) as u8)
     }
@@ -141,10 +143,12 @@ struct Yuyv<'pix> {
 }
 
 impl<'pix> Yuyv<'pix> {
+    #[must_use]
     pub fn new(buf: &'pix mut [u8], width: u32, height: u32) -> Self {
         Self { buf, width, height }
     }
 
+    #[must_use]
     pub fn splitn(&mut self, n: u32) -> Vec<Yuyv<'_>> {
         debug_assert!(self.height > 1);
         debug_assert!(n > 0);
@@ -169,10 +173,12 @@ impl<'pix> Yuyv<'pix> {
             .collect()
     }
 
+    #[must_use]
     pub const fn iter_avg(&self, group_sz: u32) -> IterAvg<'_> {
         IterAvg::new(self, group_sz)
     }
 
+    #[must_use]
     pub const fn get_brightness(&self, x: u32, y: u32) -> Brightness {
         Brightness(self.buf[self.xy_to_idx(x, y)])
     }
@@ -189,6 +195,7 @@ impl<'pix> Yuyv<'pix> {
     // 0       1       2       3
     // Y1 U1/2 Y2 V1/2 Y3 U3/4 Y4 V3/4      0
     // Y5 U5/6 Y6 V5/6 Y7 U7/8 Y8 V7/8      1
+    #[must_use]
     const fn xy_to_idx(&self, x: u32, y: u32) -> usize {
         (2 * (y * self.width + x)) as usize
     }
@@ -204,6 +211,7 @@ struct IterAvg<'pix> {
 }
 
 impl<'pix> IterAvg<'pix> {
+    #[must_use]
     const fn new(pixels: &'pix Yuyv<'pix>, group_sz: u32) -> Self {
         Self {
             pixels,
@@ -219,6 +227,7 @@ impl Iterator for IterAvg<'_> {
     type Item = (u32, u32, Brightness);
 
     #[allow(clippy::cast_possible_truncation)]
+    #[must_use]
     fn next(&mut self) -> Option<Self::Item> {
         if self.done {
             None
@@ -262,6 +271,7 @@ impl<'pix> Frame<'pix> {
         }
     }
 
+    #[must_use]
     pub fn splitn(&mut self, n: u32) -> Vec<Frame<'_>> {
         self.pixels
             .splitn(n)
