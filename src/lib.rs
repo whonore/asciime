@@ -15,7 +15,9 @@
 
 use std::cmp;
 use std::collections::HashMap;
+use std::fs;
 use std::ops::Index;
+use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context};
 
@@ -33,20 +35,34 @@ use v4l::{
     video::{Capture, Output},
 };
 
-// TODO: Add more options
 // $@B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/\|()1{}[]?-_+~<>i!lI;:,"^`'.
-pub const ASCII_MAP_64: [char; 64] = [
+const ASCII_MAP_NBITS: u32 = 6;
+const ASCII_MAP_64: [char; 2_usize.pow(ASCII_MAP_NBITS)] = [
     '$', '@', 'B', '%', '&', 'W', 'M', '#', '*', 'o', 'h', 'k', 'b', 'd', 'p', 'q', 'w', 'm', 'Z',
     '0', 'Q', 'L', 'C', 'J', 'U', 'Y', 'X', 'z', 'c', 'u', 'n', 'x', 'r', 'j', 'f', '/', '\\', '|',
     '(', ')', '1', '{', '}', '[', ']', '?', '-', '_', '+', '~', '<', '>', 'i', '!', 'I', ';', ':',
     ',', '"', '^', '`', '\'', '.', ' ',
 ];
 // TODO: Make this an argument
-pub const FONT: &[u8] = include_bytes!("../font/FiraCode-VF.ttf");
+const DEFAULT_FONT: &[u8] = include_bytes!("../font/FiraCode-VF.ttf");
 // TODO: Figure out good values for these
-pub const FONT_SCALE: f32 = 20.0;
+const DEFAULT_FONT_SCALE: f32 = 20.0;
 const AVG_GROUP_SIZE: u32 = 10;
 const NSUBFRAMES: u32 = 4;
+
+#[must_use]
+pub fn charset(nbits: u32) -> Option<Vec<char>> {
+    (nbits <= ASCII_MAP_NBITS).then(|| {
+        let step = 2_usize.pow(ASCII_MAP_NBITS - nbits);
+        let mut chars = ASCII_MAP_64
+            .iter()
+            .step_by(step)
+            .copied()
+            .collect::<Vec<_>>();
+        *chars.last_mut().unwrap() = ' ';
+        chars
+    })
+}
 
 #[derive(Debug)]
 pub struct RenderedGlyph(Vec<(u32, u32, Brightness)>);
@@ -62,25 +78,68 @@ impl RenderedGlyph {
     }
 }
 
-#[derive(Debug)]
-pub struct GlyphMap(HashMap<char, RenderedGlyph>);
+pub struct GlyphMapBuilder<'ascii> {
+    font: Option<PathBuf>,
+    scale: Option<f32>,
+    ascii_map: &'ascii AsciiMap,
+}
 
-impl GlyphMap {
-    pub fn new(font: &'static [u8], scale: f32, chars: &[char]) -> anyhow::Result<Self> {
-        let font = Font::try_from_bytes(font).context("Failed to load font")?;
-        let scale = Scale::uniform(scale);
-        Ok(Self(
-            chars
-                .iter()
-                .map(|&c| (c, RenderedGlyph::new(font.glyph(c).scaled(scale))))
-                .collect(),
+impl<'ascii> GlyphMapBuilder<'ascii> {
+    #[must_use]
+    pub const fn new(ascii_map: &'ascii AsciiMap) -> Self {
+        Self {
+            font: None,
+            scale: None,
+            ascii_map,
+        }
+    }
+
+    #[must_use]
+    pub fn with_font<P>(mut self, font: P) -> Self
+    where
+        P: AsRef<Path>,
+    {
+        self.font = Some(font.as_ref().into());
+        self
+    }
+
+    #[must_use]
+    pub const fn with_scale(mut self, scale: f32) -> Self {
+        self.scale = Some(scale);
+        self
+    }
+
+    pub fn build(self) -> anyhow::Result<GlyphMap> {
+        let data = self.font.map_or(Ok(DEFAULT_FONT.to_vec()), |path| {
+            fs::read(&path).with_context(|| format!("Failed to read font file {}", path.display()))
+        })?;
+        let font = Font::try_from_bytes(&data).context("Failed to load font")?;
+        Ok(GlyphMap::new(
+            &font,
+            Scale::uniform(self.scale.unwrap_or(DEFAULT_FONT_SCALE)),
+            self.ascii_map.chars(),
         ))
     }
 }
 
 #[derive(Debug)]
+pub struct GlyphMap(HashMap<char, RenderedGlyph>);
+
+impl GlyphMap {
+    #[must_use]
+    pub fn new(font: &Font<'_>, scale: Scale, chars: &[char]) -> Self {
+        Self(
+            chars
+                .iter()
+                .map(|&c| (c, RenderedGlyph::new(font.glyph(c).scaled(scale))))
+                .collect(),
+        )
+    }
+}
+
+#[derive(Debug)]
 pub struct AsciiMap {
-    map: &'static [char],
+    map: Vec<char>,
     nbits: u32,
 }
 
@@ -91,7 +150,7 @@ impl AsciiMap {
         clippy::cast_sign_loss
     )]
     #[must_use]
-    pub fn new(map: &'static [char]) -> Self {
+    pub fn new(map: Vec<char>) -> Self {
         let nbits = (map.len() as f32).log2() as u32;
         debug_assert!(
             2usize.pow(nbits) == map.len(),
@@ -100,10 +159,12 @@ impl AsciiMap {
             nbits
         );
         debug_assert!(nbits <= u8::BITS, "nbits={}", nbits);
-        Self {
-            map,
-            nbits: (map.len() as f32).log2() as u32,
-        }
+        Self { map, nbits }
+    }
+
+    #[must_use]
+    pub fn chars(&self) -> &[char] {
+        &self.map
     }
 }
 

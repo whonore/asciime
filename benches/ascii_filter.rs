@@ -1,11 +1,9 @@
-use asciime_filter::{
-    AsciiFilter, AsciiMap, Frame, FrameFilter, GlyphMap, ASCII_MAP_64, FONT, FONT_SCALE,
-};
+use asciime_filter::{charset, AsciiFilter, AsciiMap, Frame, FrameFilter, GlyphMapBuilder};
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 
 pub fn ascii_filter_bench(c: &mut Criterion) {
-    let ascii_map = AsciiMap::new(&ASCII_MAP_64);
-    let glyphs = GlyphMap::new(FONT, FONT_SCALE, &ASCII_MAP_64).unwrap();
+    let ascii_map = AsciiMap::new(charset(6).unwrap());
+    let glyphs = GlyphMapBuilder::new(&ascii_map).build().unwrap();
     let ascii_filter = AsciiFilter::new(&ascii_map, &glyphs);
 
     let width: u32 = 1280;

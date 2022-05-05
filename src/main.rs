@@ -10,13 +10,15 @@
 #![warn(clippy::use_self)]
 #![warn(clippy::if_then_some_else_none)]
 
-use asciime_filter::{
-    AsciiFilter, AsciiMap, GlyphMap, StreamProcessor, ASCII_MAP_64, FONT, FONT_SCALE,
-};
+use asciime_filter::{charset, AsciiFilter, AsciiMap, GlyphMapBuilder, StreamProcessor};
+
+use anyhow::Context;
 
 fn main() -> anyhow::Result<()> {
-    let ascii_map = AsciiMap::new(&ASCII_MAP_64);
-    let glyphs = GlyphMap::new(FONT, FONT_SCALE, &ASCII_MAP_64)?;
+    let chars = charset(6).context("No charset for that number of bits")?;
+    println!("charset: {}", chars.iter().collect::<String>());
+    let ascii_map = AsciiMap::new(chars);
+    let glyphs = GlyphMapBuilder::new(&ascii_map).build()?;
 
     // TODO: Make these arguments
     let source = "/dev/video0";
