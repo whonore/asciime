@@ -12,25 +12,31 @@ pub fn ascii_filter_bench(c: &mut Criterion) {
     let height: u32 = 720;
     let size = (width * height * 2) as usize;
 
-    let buf = vec![0; size];
-    let empty_frame = Frame::new(buf, width, height);
+    let empty_buf = vec![0; size];
 
     let seed: usize = 123;
-    let buf = (0..size).map(|i| ((seed + i) * (i + 1)) as u8).collect();
-    let arbitrary_frame = Frame::new(buf, width, height);
+    let arbitrary_buf = (0..size)
+        .map(|i| ((seed + i) * (i + 1)) as u8)
+        .collect::<Vec<_>>();
 
     let mut group = c.benchmark_group("AsciiFilter");
     group.bench_function("empty frame", |b| {
         b.iter_batched(
-            || empty_frame.clone(),
-            |frame| ascii_filter.process(frame),
+            || empty_buf.clone(),
+            |mut buf| {
+                let mut frame = Frame::new(&mut buf, width, height);
+                ascii_filter.process(&mut frame);
+            },
             BatchSize::SmallInput,
         )
     });
     group.bench_function("arbitrary frame", |b| {
         b.iter_batched(
-            || arbitrary_frame.clone(),
-            |frame| ascii_filter.process(frame),
+            || arbitrary_buf.clone(),
+            |mut buf| {
+                let mut frame = Frame::new(&mut buf, width, height);
+                ascii_filter.process(&mut frame);
+            },
             BatchSize::SmallInput,
         )
     });

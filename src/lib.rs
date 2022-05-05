@@ -21,6 +21,8 @@ use anyhow::{anyhow, Context};
 
 use itertools::Itertools;
 
+use rayon::prelude::*;
+
 use rusttype::{point, Font, Scale, ScaledGlyph};
 
 use v4l::{
@@ -44,6 +46,7 @@ pub const FONT: &[u8] = include_bytes!("../font/FiraCode-VF.ttf");
 // TODO: Figure out good values for these
 pub const FONT_SCALE: f32 = 20.0;
 const AVG_GROUP_SIZE: u32 = 10;
+const NSUBFRAMES: u32 = 4;
 
 #[derive(Debug)]
 pub struct RenderedGlyph(Vec<(u32, u32, Brightness)>);
@@ -130,23 +133,47 @@ impl From<f32> for Brightness {
     }
 }
 
-#[derive(Debug, Clone)]
-struct Yuyv {
-    buf: Vec<u8>,
+#[derive(Debug)]
+struct Yuyv<'pix> {
+    buf: &'pix mut [u8],
     width: u32,
     height: u32,
 }
 
-impl Yuyv {
-    pub fn new(buf: Vec<u8>, width: u32, height: u32) -> Self {
+impl<'pix> Yuyv<'pix> {
+    pub fn new(buf: &'pix mut [u8], width: u32, height: u32) -> Self {
         Self { buf, width, height }
+    }
+
+    pub fn splitn(&mut self, n: u32) -> Vec<Yuyv<'_>> {
+        debug_assert!(self.height > 1);
+        debug_assert!(n > 0);
+        let mut len = self.buf.len() / 2;
+        let mut height = self.height / 2;
+
+        let (sub1, sub2) = self.buf.split_at_mut(len);
+        let mut bufs = vec![sub1, sub2];
+        for _ in 1..n {
+            let mut new_bufs = vec![];
+            len /= 2;
+            height /= 2;
+            for buf in bufs {
+                let (subbuf1, subbuf2) = buf.split_at_mut(len);
+                new_bufs.push(subbuf1);
+                new_bufs.push(subbuf2);
+            }
+            bufs = new_bufs;
+        }
+        bufs.into_iter()
+            .map(|buf| Yuyv::new(buf, self.width, height))
+            .collect()
     }
 
     pub const fn iter_avg(&self, group_sz: u32) -> IterAvg<'_> {
         IterAvg::new(self, group_sz)
     }
 
-    pub fn get_brightness(&self, x: u32, y: u32) -> Brightness {
+    pub const fn get_brightness(&self, x: u32, y: u32) -> Brightness {
         Brightness(self.buf[self.xy_to_idx(x, y)])
     }
 
@@ -155,9 +182,7 @@ impl Yuyv {
         B: Into<Brightness>,
     {
         let idx = self.xy_to_idx(x, y);
-        if let Some(b_old) = self.buf.get_mut(idx) {
-            *b_old = b.into().0;
-        }
+        self.buf[idx] = b.into().0;
     }
 
     // https://egeeks.github.io/kernal/media/V4L2-PIX-FMT-YUYV.html
@@ -171,7 +196,7 @@ impl Yuyv {
 
 #[derive(Debug)]
 struct IterAvg<'pix> {
-    pixels: &'pix Yuyv,
+    pixels: &'pix Yuyv<'pix>,
     group_sz: u32,
     x: u32,
     y: u32,
@@ -179,7 +204,7 @@ struct IterAvg<'pix> {
 }
 
 impl<'pix> IterAvg<'pix> {
-    const fn new(pixels: &'pix Yuyv, group_sz: u32) -> Self {
+    const fn new(pixels: &'pix Yuyv<'pix>, group_sz: u32) -> Self {
         Self {
             pixels,
             group_sz,
@@ -224,27 +249,45 @@ impl Iterator for IterAvg<'_> {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Frame {
-    pixels: Yuyv,
+#[derive(Debug)]
+pub struct Frame<'pix> {
+    pixels: Yuyv<'pix>,
 }
 
-impl Frame {
+impl<'pix> Frame<'pix> {
     #[must_use]
-    pub fn new(buf: Vec<u8>, width: u32, height: u32) -> Self {
+    pub fn new(buf: &'pix mut [u8], width: u32, height: u32) -> Self {
         Self {
             pixels: Yuyv::new(buf, width, height),
         }
     }
 
+    pub fn splitn(&mut self, n: u32) -> Vec<Frame<'_>> {
+        self.pixels
+            .splitn(n)
+            .into_iter()
+            .map(|pixels| Frame { pixels })
+            .collect()
+    }
+
     #[must_use]
-    pub fn as_bytes(&self) -> &[u8] {
-        &self.pixels.buf
+    pub const fn as_bytes(&self) -> &[u8] {
+        self.pixels.buf
+    }
+
+    #[must_use]
+    pub const fn width(&self) -> u32 {
+        self.pixels.width
+    }
+
+    #[must_use]
+    pub const fn height(&self) -> u32 {
+        self.pixels.height
     }
 }
 
 pub trait FrameFilter {
-    fn process(&self, frame: Frame) -> Frame;
+    fn process<'pix>(&self, frame: &mut Frame<'pix>);
 }
 
 // TODO: Add option for grayscale/color
@@ -261,25 +304,35 @@ impl<'ascii, 'glyph> AsciiFilter<'ascii, 'glyph> {
 }
 
 impl FrameFilter for AsciiFilter<'_, '_> {
-    #[allow(clippy::cast_precision_loss)]
-    fn process(&self, in_frame: Frame) -> Frame {
-        let mut out_frame = in_frame.clone();
-        in_frame
-            .pixels
-            .iter_avg(AVG_GROUP_SIZE)
-            .map(|(x, y, pix)| {
-                (
-                    x,
-                    y,
-                    self.glyphs.0.get(&pix.as_ascii(self.ascii_map)).unwrap(),
-                )
-            })
-            .for_each(|(xmin, ymin, glyph)| {
-                for (x, y, v) in &glyph.0 {
-                    out_frame.pixels.set_brightness(x + xmin, y + ymin, *v);
-                }
+    fn process<'pix>(&self, frame: &mut Frame<'pix>) {
+        let mut buf = frame.as_bytes().to_vec();
+        let mut old_frame = Frame::new(&mut buf, frame.width(), frame.height());
+        let mut subframes = frame.splitn(NSUBFRAMES);
+        let old_subframes = old_frame.splitn(NSUBFRAMES);
+        subframes
+            .par_iter_mut()
+            .zip(old_subframes)
+            .for_each(|(subframe, old_subframe)| {
+                let width = old_subframe.width();
+                let height = old_subframe.height();
+                old_subframe
+                    .pixels
+                    .iter_avg(AVG_GROUP_SIZE)
+                    .flat_map(|(x, y, pix)| {
+                        self.glyphs
+                            .0
+                            .get(&pix.as_ascii(self.ascii_map))
+                            .unwrap()
+                            .0
+                            .iter()
+                            .filter_map(move |(xoff, yoff, b)| {
+                                let x = x + xoff;
+                                let y = y + yoff;
+                                (x < width && y < height).then(|| (x, y, b))
+                            })
+                    })
+                    .for_each(|(x, y, b)| subframe.pixels.set_brightness(x, y, *b));
             });
-        out_frame
     }
 }
 
@@ -368,10 +421,11 @@ where
             OutputStream::next(&mut self.out_stream).context("Failed to read output frame")?;
 
         // Process the frame
-        let frame = self.filters.iter().fold(
-            Frame::new(buf_in.to_vec(), self.width, self.height),
-            |frame, filter| filter.process(frame),
-        );
+        let mut buf = buf_in.to_vec();
+        let mut frame = Frame::new(&mut buf, self.width, self.height);
+        for filter in &self.filters {
+            filter.process(&mut frame);
+        }
 
         // Output the processed frame
         let buf_out = &mut buf_out[..buf_in.len()];

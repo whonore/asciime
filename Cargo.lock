@@ -39,6 +39,7 @@ dependencies = [
  "anyhow",
  "criterion",
  "itertools",
+ "rayon",
  "rusttype",
  "v4l",
 ]
