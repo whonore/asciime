@@ -43,11 +43,14 @@ const ASCII_MAP_64: [char; 2_usize.pow(ASCII_MAP_NBITS)] = [
     '(', ')', '1', '{', '}', '[', ']', '?', '-', '_', '+', '~', '<', '>', 'i', '!', 'I', ';', ':',
     ',', '"', '^', '`', '\'', '.', ' ',
 ];
-// TODO: Make this an argument
+
 const DEFAULT_FONT: &[u8] = include_bytes!("../font/FiraCode-VF.ttf");
 // TODO: Figure out good values for these
 const DEFAULT_FONT_SCALE: f32 = 20.0;
+// TODO: Set this based on font size
 const AVG_GROUP_SIZE: u32 = 10;
+
+// TODO: Set this based on frame size
 const NSUBFRAMES: u32 = 4;
 
 #[must_use]
