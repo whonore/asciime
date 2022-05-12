@@ -43,14 +43,10 @@ fn main() -> anyhow::Result<()> {
     let chars = charset(opts.nbits).context("No charset for that number of bits")?;
     println!("charset: {}", chars.iter().collect::<String>());
     let ascii_map = AsciiMap::new(chars);
-    let mut glyphs = GlyphMapBuilder::new(&ascii_map);
-    if let Some(font) = opts.font {
-        glyphs = glyphs.with_font(font);
-    }
-    if let Some(size) = opts.font_size {
-        glyphs = glyphs.with_scale(size);
-    }
-    let glyphs = glyphs.build()?;
+    let glyphs = GlyphMapBuilder::new(&ascii_map)
+        .with_font_or_default(opts.font)
+        .with_size_or_default(opts.font_size)
+        .build()?;
 
     let ascii_filter = AsciiFilter::new(&ascii_map, &glyphs);
     let mut stream = StreamProcessor::new(&opts.source, &opts.sink)?.add_filter(&ascii_filter);

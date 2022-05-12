@@ -104,7 +104,7 @@ impl RenderedGlyph {
 
 pub struct GlyphMapBuilder<'ascii> {
     font: Option<PathBuf>,
-    scale: Option<f32>,
+    size: Option<f32>,
     ascii_map: &'ascii AsciiMap,
 }
 
@@ -113,7 +113,7 @@ impl<'ascii> GlyphMapBuilder<'ascii> {
     pub const fn new(ascii_map: &'ascii AsciiMap) -> Self {
         Self {
             font: None,
-            scale: None,
+            size: None,
             ascii_map,
         }
     }
@@ -128,9 +128,30 @@ impl<'ascii> GlyphMapBuilder<'ascii> {
     }
 
     #[must_use]
-    pub const fn with_scale(mut self, scale: f32) -> Self {
-        self.scale = Some(scale);
+    pub fn with_font_or_default<P>(self, font: Option<P>) -> Self
+    where
+        P: AsRef<Path>,
+    {
+        if let Some(font) = font {
+            self.with_font(font)
+        } else {
+            self
+        }
+    }
+
+    #[must_use]
+    pub const fn with_size(mut self, size: f32) -> Self {
+        self.size = Some(size);
         self
+    }
+
+    #[must_use]
+    pub const fn with_size_or_default(self, size: Option<f32>) -> Self {
+        if let Some(size) = size {
+            self.with_size(size)
+        } else {
+            self
+        }
     }
 
     pub fn build(self) -> anyhow::Result<GlyphMap> {
@@ -140,7 +161,7 @@ impl<'ascii> GlyphMapBuilder<'ascii> {
         let font = Font::try_from_bytes(&data).context("Failed to load font")?;
         Ok(GlyphMap::new(
             &font,
-            Scale::uniform(self.scale.unwrap_or(DEFAULT_FONT_SCALE)),
+            Scale::uniform(self.size.unwrap_or(DEFAULT_FONT_SCALE)),
             self.ascii_map.chars(),
         ))
     }
