@@ -41,10 +41,7 @@ const ASCII_MAP_64: [char; 2_usize.pow(ASCII_MAP_NBITS)] = [
 ];
 
 const DEFAULT_FONT: &[u8] = include_bytes!("../font/FiraCode-VF.ttf");
-// TODO: Figure out good values for these
-const DEFAULT_FONT_SCALE: f32 = 20.0;
-// TODO: Set this based on font size
-const AVG_GROUP_SIZE: u32 = 10;
+const DEFAULT_FONT_SCALE: f32 = 10.0;
 
 // TODO: Set this based on frame size
 const NSUBFRAMES: u32 = 4;
@@ -67,12 +64,40 @@ pub fn charset(nbits: u32) -> Option<Vec<char>> {
 pub struct RenderedGlyph(Vec<(u32, u32, Brightness)>);
 
 impl RenderedGlyph {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     #[must_use]
     pub fn new(glyph: ScaledGlyph<'_>) -> Self {
+        let scale = glyph.scale().x as u32;
+        let glyph = glyph.positioned(point(0.0, 0.0));
+        let bb = glyph.pixel_bounding_box().unwrap_or_default();
+        let width = bb.width() as u32;
+        let height = bb.height() as u32;
+
         let mut pts = vec![];
-        glyph.positioned(point(0.0, 0.0)).draw(|x, y, v| {
+        glyph.draw(|x, y, v| {
             pts.push((x, y, Brightness::from(v)));
         });
+        // Fill in missing columns
+        for x in width..scale {
+            for y in 0..height {
+                pts.push((x, y, Brightness::default()));
+            }
+        }
+        // Fill in missing rows
+        for y in height..scale {
+            for x in 0..scale {
+                pts.push((x, y, Brightness::default()));
+            }
+        }
+
+        debug_assert!(pts.iter().map(|(x, y, _)| (x, y)).all_unique(), "{:?}", pts);
+        debug_assert!(
+            pts.len() == (scale * scale) as usize,
+            "pts.len()={} scale={}",
+            pts.len(),
+            scale
+        );
+
         Self(pts)
     }
 }
@@ -122,17 +147,29 @@ impl<'ascii> GlyphMapBuilder<'ascii> {
 }
 
 #[derive(Debug)]
-pub struct GlyphMap(HashMap<char, RenderedGlyph>);
+pub struct GlyphMap {
+    glyphs: HashMap<char, RenderedGlyph>,
+    width: u32,
+    height: u32,
+}
 
 impl GlyphMap {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     #[must_use]
     pub fn new(font: &Font<'_>, scale: Scale, chars: &[char]) -> Self {
-        Self(
-            chars
+        Self {
+            glyphs: chars
                 .iter()
                 .map(|&c| (c, RenderedGlyph::new(font.glyph(c).scaled(scale))))
                 .collect(),
-        )
+            width: scale.x as u32,
+            height: scale.y as u32,
+        }
+    }
+
+    #[must_use]
+    pub fn get(&self, c: &char) -> Option<&RenderedGlyph> {
+        self.glyphs.get(c)
     }
 }
 
@@ -177,7 +214,7 @@ impl Index<Brightness> for AsciiMap {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Brightness(u8);
 
 impl Brightness {
@@ -234,8 +271,8 @@ impl<'pix> Yuyv<'pix> {
     }
 
     #[must_use]
-    pub const fn iter_avg(&self, group_sz: u32) -> IterAvg<'_> {
-        IterAvg::new(self, group_sz)
+    pub const fn iter_avg(&self, width: u32, height: u32) -> IterAvg<'_> {
+        IterAvg::new(self, width, height)
     }
 
     #[must_use]
@@ -264,7 +301,8 @@ impl<'pix> Yuyv<'pix> {
 #[derive(Debug)]
 struct IterAvg<'pix> {
     pixels: &'pix Yuyv<'pix>,
-    group_sz: u32,
+    width: u32,
+    height: u32,
     x: u32,
     y: u32,
     done: bool,
@@ -272,10 +310,11 @@ struct IterAvg<'pix> {
 
 impl<'pix> IterAvg<'pix> {
     #[must_use]
-    const fn new(pixels: &'pix Yuyv<'pix>, group_sz: u32) -> Self {
+    const fn new(pixels: &'pix Yuyv<'pix>, width: u32, height: u32) -> Self {
         Self {
             pixels,
-            group_sz,
+            width,
+            height,
             x: 0,
             y: 0,
             done: false,
@@ -294,8 +333,8 @@ impl Iterator for IterAvg<'_> {
         } else {
             // Average the brightness of the next group_sz pixels in the x and
             // y directions.
-            let next_x = cmp::min(self.x + self.group_sz, self.pixels.width);
-            let next_y = cmp::min(self.y + self.group_sz, self.pixels.height);
+            let next_x = cmp::min(self.x + self.width, self.pixels.width);
+            let next_y = cmp::min(self.y + self.height, self.pixels.height);
             let npix = (next_x - self.x) * (next_y - self.y);
             let avg = (self.x..next_x)
                 .cartesian_product(self.y..next_y)
@@ -387,10 +426,9 @@ impl FrameFilter for AsciiFilter<'_, '_> {
                 let height = old_subframe.height();
                 old_subframe
                     .pixels
-                    .iter_avg(AVG_GROUP_SIZE)
+                    .iter_avg(self.glyphs.width, self.glyphs.height)
                     .flat_map(|(x, y, pix)| {
                         self.glyphs
-                            .0
                             .get(&pix.as_ascii(self.ascii_map))
                             .unwrap()
                             .0
