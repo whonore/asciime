@@ -20,13 +20,9 @@ use std::ops::Index;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context};
-
 use itertools::Itertools;
-
 use rayon::prelude::*;
-
 use rusttype::{point, Font, Scale, ScaledGlyph};
-
 use v4l::{
     buffer::Type,
     format::fourcc::FourCC,

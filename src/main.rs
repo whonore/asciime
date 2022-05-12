@@ -12,11 +12,10 @@
 
 use std::path::PathBuf;
 
-use asciime_filter::{charset, AsciiFilter, AsciiMap, GlyphMapBuilder, StreamProcessor};
-
 use anyhow::Context;
-
 use clap::Parser;
+
+use asciime_filter::{charset, AsciiFilter, AsciiMap, GlyphMapBuilder, StreamProcessor};
 
 #[derive(Debug, Parser)]
 #[clap(author, version, about)]
