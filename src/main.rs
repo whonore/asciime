@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::Parser;
 
-use asciime_filter::{charset, AsciiFilter, AsciiMap, GlyphMapBuilder, StreamProcessor};
+use asciime_filter::{charset, AsciiFilter, AsciiMap, AsciiMode, GlyphMapBuilder, StreamProcessor};
 
 #[derive(Debug, Parser)]
 #[clap(author, version, about)]
@@ -35,6 +35,24 @@ pub struct Opts {
     #[clap(short = 's', long = "size")]
     /// Font size (pixels)
     font_size: Option<f32>,
+    #[clap(short = 'm', long = "mode", arg_enum, default_value_t = Mode::Color)]
+    /// Color mode
+    mode: Mode,
+}
+
+#[derive(Debug, Clone, Copy, clap::ArgEnum)]
+enum Mode {
+    Grayscale,
+    Color,
+}
+
+impl From<Mode> for AsciiMode {
+    fn from(mode: Mode) -> Self {
+        match mode {
+            Mode::Grayscale => Self::Grayscale,
+            Mode::Color => Self::Color,
+        }
+    }
 }
 
 fn main() -> anyhow::Result<()> {
@@ -48,7 +66,7 @@ fn main() -> anyhow::Result<()> {
         .with_size_or_default(opts.font_size)
         .build()?;
 
-    let ascii_filter = AsciiFilter::new(&ascii_map, &glyphs);
+    let ascii_filter = AsciiFilter::new(&ascii_map, &glyphs, opts.mode.into());
     let mut stream = StreamProcessor::new(&opts.source, &opts.sink)?.add_filter(&ascii_filter);
     loop {
         stream.process_frame()?;

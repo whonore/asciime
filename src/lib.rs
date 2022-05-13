@@ -309,6 +309,10 @@ impl<'pix> Yuyv<'pix> {
         self.buf[idx] = b.into().0;
     }
 
+    pub fn grayscale(&mut self) {
+        self.buf.fill(127);
+    }
+
     // https://egeeks.github.io/kernal/media/V4L2-PIX-FMT-YUYV.html
     // 0       1       2       3
     // Y1 U1/2 Y2 V1/2 Y3 U3/4 Y4 V3/4      0
@@ -400,6 +404,10 @@ impl<'pix> Frame<'pix> {
             .collect()
     }
 
+    pub fn grayscale(&mut self) {
+        self.pixels.grayscale();
+    }
+
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8] {
         self.pixels.buf
@@ -420,16 +428,40 @@ pub trait FrameFilter {
     fn process<'pix>(&self, frame: &mut Frame<'pix>);
 }
 
-// TODO: Add option for grayscale/color
+#[derive(Debug, Clone, Copy)]
+pub enum AsciiMode {
+    Grayscale,
+    Color,
+}
+
+impl AsciiMode {
+    #[must_use]
+    pub const fn next(self) -> Self {
+        match self {
+            Self::Grayscale => Self::Color,
+            Self::Color => Self::Grayscale,
+        }
+    }
+}
+
 pub struct AsciiFilter<'ascii, 'glyph> {
     ascii_map: &'ascii AsciiMap,
     glyphs: &'glyph GlyphMap,
+    mode: AsciiMode,
 }
 
 impl<'ascii, 'glyph> AsciiFilter<'ascii, 'glyph> {
     #[must_use]
-    pub const fn new(ascii_map: &'ascii AsciiMap, glyphs: &'glyph GlyphMap) -> Self {
-        Self { ascii_map, glyphs }
+    pub const fn new(
+        ascii_map: &'ascii AsciiMap,
+        glyphs: &'glyph GlyphMap,
+        mode: AsciiMode,
+    ) -> Self {
+        Self {
+            ascii_map,
+            glyphs,
+            mode,
+        }
     }
 }
 
@@ -437,6 +469,11 @@ impl FrameFilter for AsciiFilter<'_, '_> {
     fn process<'pix>(&self, frame: &mut Frame<'pix>) {
         let mut buf = frame.as_bytes().to_vec();
         let mut old_frame = Frame::new(&mut buf, frame.width(), frame.height());
+        match self.mode {
+            AsciiMode::Grayscale => frame.grayscale(),
+            AsciiMode::Color => {}
+        }
+
         let mut subframes = frame.splitn(NSUBFRAMES);
         let old_subframes = old_frame.splitn(NSUBFRAMES);
         subframes
