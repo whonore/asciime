@@ -343,7 +343,7 @@ impl<'pix> Yuyv<'pix> {
         self.buf[idx] = b.into().0;
     }
 
-    pub fn grayscale(&mut self) {
+    pub fn as_grayscale(&mut self) {
         self.buf.fill(127);
     }
 
@@ -438,8 +438,8 @@ impl<'pix> Frame<'pix> {
             .collect()
     }
 
-    pub fn grayscale(&mut self) {
-        self.pixels.grayscale();
+    pub fn as_grayscale(&mut self) {
+        self.pixels.as_grayscale();
     }
 
     #[must_use]
@@ -520,7 +520,7 @@ impl FrameFilter for AsciiFilter<'_> {
         let mut buf = frame.as_bytes().to_vec();
         let mut old_frame = Frame::new(&mut buf, frame.width(), frame.height());
         match self.mode {
-            AsciiMode::Grayscale => frame.grayscale(),
+            AsciiMode::Grayscale => frame.as_grayscale(),
             AsciiMode::Color => {}
         }
 
