@@ -35,7 +35,7 @@ pub struct Opts {
     #[clap()]
     /// Path to the output device
     sink: String,
-    #[clap(short = 'c', long = "charset-bits", default_value_t = 6)]
+    #[clap(short = 'b', long = "bitdepth", default_value_t = 6)]
     /// Number of bits to use for the charset
     nbits: u32,
     #[clap(short = 'f', long = "font")]
