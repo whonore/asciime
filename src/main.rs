@@ -122,7 +122,7 @@ fn main() -> anyhow::Result<()> {
     let mut stream =
         StreamProcessor::new(&opts.source, &opts.sink)?.add_filter(ascii_filter.clone());
 
-    enable_raw_mode()?;
+    enable_raw_mode().context("Failed to enable raw mode")?;
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || loop {
         if let Ok(TEvent::Key(key)) = event::read() {
@@ -175,6 +175,6 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    disable_raw_mode()?;
+    disable_raw_mode().context("Failed to disable raw mode")?;
     Ok(())
 }
