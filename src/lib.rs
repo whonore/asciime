@@ -41,14 +41,14 @@ const ASCII_MAP_64: [char; 2_usize.pow(ASCII_MAP_NBITS)] = [
 ];
 
 const DEFAULT_FONT: &[u8] = include_bytes!("../font/FiraCode-VF.ttf");
-const DEFAULT_FONT_SCALE: f32 = 10.0;
+const DEFAULT_FONT_SCALE: u32 = 10;
 
 // TODO: Set this based on frame size
 const NSUBFRAMES: u32 = 4;
 
 #[must_use]
 pub fn charset(nbits: u32) -> Option<Vec<char>> {
-    (nbits <= ASCII_MAP_NBITS).then(|| {
+    (1..=ASCII_MAP_NBITS).contains(&nbits).then(|| {
         let step = 2_usize.pow(ASCII_MAP_NBITS - nbits);
         let mut chars = ASCII_MAP_64
             .iter()
@@ -60,7 +60,7 @@ pub fn charset(nbits: u32) -> Option<Vec<char>> {
     })
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RenderedGlyph(Vec<(u32, u32, Brightness)>);
 
 impl RenderedGlyph {
@@ -102,19 +102,19 @@ impl RenderedGlyph {
     }
 }
 
-pub struct GlyphMapBuilder<'ascii> {
+pub struct GlyphMapBuilder<'chars> {
     font: Option<PathBuf>,
-    size: Option<f32>,
-    ascii_map: &'ascii AsciiMap,
+    size: Option<u32>,
+    chars: &'chars [char],
 }
 
-impl<'ascii> GlyphMapBuilder<'ascii> {
+impl<'chars> GlyphMapBuilder<'chars> {
     #[must_use]
-    pub const fn new(ascii_map: &'ascii AsciiMap) -> Self {
+    pub const fn new(chars: &'chars [char]) -> Self {
         Self {
             font: None,
             size: None,
-            ascii_map,
+            chars,
         }
     }
 
@@ -140,13 +140,13 @@ impl<'ascii> GlyphMapBuilder<'ascii> {
     }
 
     #[must_use]
-    pub const fn with_size(mut self, size: f32) -> Self {
+    pub const fn with_size(mut self, size: u32) -> Self {
         self.size = Some(size);
         self
     }
 
     #[must_use]
-    pub const fn with_size_or_default(self, size: Option<f32>) -> Self {
+    pub const fn with_size_or_default(self, size: Option<u32>) -> Self {
         if let Some(size) = size {
             self.with_size(size)
         } else {
@@ -154,35 +154,39 @@ impl<'ascii> GlyphMapBuilder<'ascii> {
         }
     }
 
-    pub fn build(self) -> anyhow::Result<GlyphMap> {
+    #[allow(clippy::cast_precision_loss)]
+    pub fn build(self) -> anyhow::Result<GlyphMap<'static>> {
         let data = self.font.map_or(Ok(DEFAULT_FONT.to_vec()), |path| {
             fs::read(&path).with_context(|| format!("Failed to read font file {}", path.display()))
         })?;
-        let font = Font::try_from_bytes(&data).context("Failed to load font")?;
+        let font = Font::try_from_vec(data).context("Failed to load font")?;
         Ok(GlyphMap::new(
-            &font,
-            Scale::uniform(self.size.unwrap_or(DEFAULT_FONT_SCALE)),
-            self.ascii_map.chars(),
+            font,
+            Scale::uniform(self.size.unwrap_or(DEFAULT_FONT_SCALE) as f32),
+            self.chars,
         ))
     }
 }
 
-#[derive(Debug)]
-pub struct GlyphMap {
+#[derive(Debug, Clone)]
+pub struct GlyphMap<'font> {
+    font: Font<'font>,
     glyphs: HashMap<char, RenderedGlyph>,
     width: u32,
     height: u32,
 }
 
-impl GlyphMap {
+impl<'font> GlyphMap<'font> {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     #[must_use]
-    pub fn new(font: &Font<'_>, scale: Scale, chars: &[char]) -> Self {
+    pub fn new(font: Font<'font>, scale: Scale, chars: &[char]) -> Self {
+        let glyphs = chars
+            .iter()
+            .map(|&c| (c, RenderedGlyph::new(font.glyph(c).scaled(scale))))
+            .collect();
         Self {
-            glyphs: chars
-                .iter()
-                .map(|&c| (c, RenderedGlyph::new(font.glyph(c).scaled(scale))))
-                .collect(),
+            font,
+            glyphs,
             width: scale.x as u32,
             height: scale.y as u32,
         }
@@ -192,9 +196,39 @@ impl GlyphMap {
     pub fn get(&self, c: &char) -> Option<&RenderedGlyph> {
         self.glyphs.get(c)
     }
+
+    #[allow(
+        clippy::cast_possible_wrap,
+        clippy::cast_precision_loss,
+        clippy::cast_sign_loss
+    )]
+    #[must_use]
+    pub fn resize(mut self, inc: i32) -> Self {
+        let add_signed = |x: u32, y: i32| -> u32 { cmp::max((x as i32) + y, 1) as u32 };
+        self.width = add_signed(self.width, inc);
+        self.height = add_signed(self.height, inc);
+        let scale = Scale {
+            x: self.width as f32,
+            y: self.height as f32,
+        };
+        for (c, g) in &mut self.glyphs {
+            *g = RenderedGlyph::new(self.font.glyph(*c).scaled(scale));
+        }
+        self
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    #[must_use]
+    pub fn set_charset(self, chars: &[char]) -> Self {
+        let scale = Scale {
+            x: self.width as f32,
+            y: self.height as f32,
+        };
+        Self::new(self.font, scale, chars)
+    }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AsciiMap {
     map: Vec<char>,
     nbits: u32,
@@ -444,28 +478,44 @@ impl AsciiMode {
     }
 }
 
-pub struct AsciiFilter<'ascii, 'glyph> {
-    ascii_map: &'ascii AsciiMap,
-    glyphs: &'glyph GlyphMap,
+#[derive(Clone)]
+pub struct AsciiFilter<'font> {
+    ascii_map: AsciiMap,
+    glyphs: GlyphMap<'font>,
     mode: AsciiMode,
 }
 
-impl<'ascii, 'glyph> AsciiFilter<'ascii, 'glyph> {
+impl<'font> AsciiFilter<'font> {
     #[must_use]
-    pub const fn new(
-        ascii_map: &'ascii AsciiMap,
-        glyphs: &'glyph GlyphMap,
-        mode: AsciiMode,
-    ) -> Self {
+    pub const fn new(ascii_map: AsciiMap, glyphs: GlyphMap<'font>, mode: AsciiMode) -> Self {
         Self {
             ascii_map,
             glyphs,
             mode,
         }
     }
+
+    #[must_use]
+    pub const fn cycle_mode(mut self) -> Self {
+        self.mode = self.mode.next();
+        self
+    }
+
+    #[must_use]
+    pub fn resize(mut self, inc: i32) -> Self {
+        self.glyphs = self.glyphs.resize(inc);
+        self
+    }
+
+    #[must_use]
+    pub fn set_charset(mut self, chars: Vec<char>) -> Self {
+        self.glyphs = self.glyphs.set_charset(&chars);
+        self.ascii_map = AsciiMap::new(chars);
+        self
+    }
 }
 
-impl FrameFilter for AsciiFilter<'_, '_> {
+impl FrameFilter for AsciiFilter<'_> {
     fn process<'pix>(&self, frame: &mut Frame<'pix>) {
         let mut buf = frame.as_bytes().to_vec();
         let mut old_frame = Frame::new(&mut buf, frame.width(), frame.height());
@@ -487,7 +537,7 @@ impl FrameFilter for AsciiFilter<'_, '_> {
                     .iter_avg(self.glyphs.width, self.glyphs.height)
                     .flat_map(|(x, y, pix)| {
                         self.glyphs
-                            .get(&pix.as_ascii(self.ascii_map))
+                            .get(&pix.as_ascii(&self.ascii_map))
                             .unwrap()
                             .0
                             .iter()
@@ -502,15 +552,15 @@ impl FrameFilter for AsciiFilter<'_, '_> {
     }
 }
 
-pub struct StreamProcessor<'cap, 'out, 'filt, F> {
+pub struct StreamProcessor<'cap, 'out, F> {
     cap_stream: MmapStream<'cap>,
     out_stream: MmapStream<'out>,
-    filters: Vec<&'filt F>,
+    filters: Vec<F>,
     width: u32,
     height: u32,
 }
 
-impl<'filt, F> StreamProcessor<'_, '_, 'filt, F>
+impl<F> StreamProcessor<'_, '_, F>
 where
     F: FrameFilter,
 {
@@ -574,8 +624,14 @@ where
     }
 
     #[must_use]
-    pub fn add_filter(mut self, filter: &'filt F) -> Self {
+    pub fn add_filter(mut self, filter: F) -> Self {
         self.filters.push(filter);
+        self
+    }
+
+    #[must_use]
+    pub fn clear_filters(mut self) -> Self {
+        self.filters.clear();
         self
     }
 

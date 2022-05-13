@@ -4,9 +4,10 @@ use asciime_filter::{
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 
 pub fn ascii_filter_bench(c: &mut Criterion) {
-    let ascii_map = AsciiMap::new(charset(6).unwrap());
-    let glyphs = GlyphMapBuilder::new(&ascii_map).build().unwrap();
-    let ascii_filter = AsciiFilter::new(&ascii_map, &glyphs, AsciiMode::Color);
+    let chars = charset(6).unwrap();
+    let glyphs = GlyphMapBuilder::new(&chars).build().unwrap();
+    let ascii_map = AsciiMap::new(chars);
+    let ascii_filter = AsciiFilter::new(ascii_map, glyphs, AsciiMode::Color);
 
     let width: u32 = 1280;
     let height: u32 = 720;
