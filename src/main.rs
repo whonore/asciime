@@ -57,6 +57,9 @@ pub struct Opts {
     #[clap(short = 'm', long = "mode", arg_enum, default_value_t = Mode::Color)]
     /// Color mode
     mode: Mode,
+    #[clap(short = 'I', long = "no-interactive")]
+    /// Disable interactive mode
+    nointeractive: bool,
 }
 
 #[derive(Debug, Clone, Copy, clap::ArgEnum)]
@@ -122,6 +125,7 @@ struct AppState<'ascii, 'cap, 'out> {
     chars: Vec<char>,
     ascii_filter: AsciiFilter<'ascii>,
     stream: StreamProcessor<'cap, 'out, AsciiFilter<'ascii>>,
+    interactive: bool,
     enabled: bool,
     redraw: bool,
 }
@@ -147,6 +151,7 @@ impl AppState<'_, '_, '_> {
             chars,
             ascii_filter,
             stream,
+            interactive: !opts.nointeractive,
             enabled: true,
             redraw: true,
         })
@@ -228,77 +233,93 @@ fn main() -> anyhow::Result<()> {
     let opts = Opts::parse();
     let mut app = AppState::from_opts(opts)?;
 
-    enable_raw_mode().context("Failed to enable raw mode")?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend).context("Failed to create terminal")?;
+    let mut terminal = if app.interactive {
+        enable_raw_mode().context("Failed to enable raw mode")?;
+        let mut stdout = io::stdout();
+        execute!(stdout, EnterAlternateScreen)?;
+        let backend = CrosstermBackend::new(stdout);
+        Some(Terminal::new(backend).context("Failed to create terminal")?)
+    } else {
+        None
+    };
 
     let (tx, rx) = mpsc::channel();
-    thread::spawn(move || loop {
-        if let Ok(TEvent::Key(key)) = event::read() {
-            tx.send(key.into()).expect("Failed to send key event");
-        }
-    });
+    if app.interactive {
+        thread::spawn(move || loop {
+            if let Ok(TEvent::Key(key)) = event::read() {
+                tx.send(key.into()).expect("Failed to send key event");
+            }
+        });
+    }
 
     loop {
         app.stream.process_frame()?;
-        if let Ok(ev) = rx.try_recv() {
-            match ev {
-                Event::Quit => {
-                    break;
+        if app.interactive {
+            if let Ok(ev) = rx.try_recv() {
+                match ev {
+                    Event::Quit => {
+                        break;
+                    }
+                    Event::Toggle => {
+                        app = app.toggle();
+                    }
+                    Event::CycleMode => {
+                        app = app.cycle_mode();
+                    }
+                    Event::ChangeSize(inc) => {
+                        app = app.change_size(inc);
+                    }
+                    Event::ChangeBitdepth(moreless) => {
+                        app = app.change_bitdepth(moreless);
+                    }
+                    _ => {}
                 }
-                Event::Toggle => {
-                    app = app.toggle();
-                }
-                Event::CycleMode => {
-                    app = app.cycle_mode();
-                }
-                Event::ChangeSize(inc) => {
-                    app = app.change_size(inc);
-                }
-                Event::ChangeBitdepth(moreless) => {
-                    app = app.change_bitdepth(moreless);
-                }
-                _ => {}
             }
-        }
-        if app.redraw {
-            terminal
-                .draw(|frame| {
-                    let status = if app.enabled { "Enabled" } else { "Disabled" };
-                    let mode = match app.mode() {
-                        AsciiMode::Grayscale => "grayscale",
-                        AsciiMode::Color => "color",
-                    };
-                    let font_size = app.font_size().to_string();
-                    let nbits = app.nbits.to_string();
-                    let chars = app.chars.iter().collect::<String>().replace(' ', "␣");
+            if app.redraw {
+                terminal
+                    .as_mut()
+                    .unwrap()
+                    .draw(|frame| {
+                        let status = if app.enabled { "Enabled" } else { "Disabled" };
+                        let mode = match app.mode() {
+                            AsciiMode::Grayscale => "grayscale",
+                            AsciiMode::Color => "color",
+                        };
+                        let font_size = app.font_size().to_string();
+                        let nbits = app.nbits.to_string();
+                        let chars = app.chars.iter().collect::<String>().replace(' ', "␣");
 
-                    let size = frame.size();
-                    let params = Table::new(vec![
-                        Row::new(vec!["capture:", &app.source]),
-                        Row::new(vec!["output:", &app.sink]),
-                        Row::new(vec!["status (<SPACE>):", status]),
-                        Row::new(vec!["mode (⏎):", mode]),
-                        Row::new(vec!["size (+/-):", &font_size]),
-                        Row::new(vec!["bit depth (⬅/➡):", &nbits]),
-                        Row::new(vec!["charset:", &chars]),
-                    ])
-                    .block(Block::default().title(Span::styled(
-                        "Parameters (Controls)",
-                        Style::default().add_modifier(Modifier::BOLD),
-                    )))
-                    .widths(&[Constraint::Length(17), Constraint::Length(64)]);
+                        let size = frame.size();
+                        let params = Table::new(vec![
+                            Row::new(vec!["capture:", &app.source]),
+                            Row::new(vec!["output:", &app.sink]),
+                            Row::new(vec!["status (<SPACE>):", status]),
+                            Row::new(vec!["mode (⏎):", mode]),
+                            Row::new(vec!["size (+/-):", &font_size]),
+                            Row::new(vec!["bit depth (⬅/➡):", &nbits]),
+                            Row::new(vec!["charset:", &chars]),
+                        ])
+                        .block(Block::default().title(Span::styled(
+                            "Parameters (Controls)",
+                            Style::default().add_modifier(Modifier::BOLD),
+                        )))
+                        .widths(&[Constraint::Length(17), Constraint::Length(64)]);
 
-                    frame.render_widget(params, size);
-                })
-                .context("Failed to write to terminal")?;
-            app.redraw = false;
+                        frame.render_widget(params, size);
+                    })
+                    .context("Failed to write to terminal")?;
+                app.redraw = false;
+            }
         }
     }
 
-    disable_raw_mode().context("Failed to disable raw mode")?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    if app.interactive {
+        disable_raw_mode().context("Failed to disable raw mode")?;
+        execute!(
+            terminal.as_mut().unwrap().backend_mut(),
+            LeaveAlternateScreen
+        )?;
+    }
+
     Ok(())
 }
