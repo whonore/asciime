@@ -10,6 +10,7 @@
 #![warn(clippy::use_self)]
 #![warn(clippy::if_then_some_else_none)]
 
+use std::io;
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread;
@@ -18,7 +19,16 @@ use anyhow::Context;
 use clap::Parser;
 use crossterm::{
     event::{self, Event as TEvent, KeyCode, KeyEvent, KeyModifiers},
-    terminal::{disable_raw_mode, enable_raw_mode},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use tui::{
+    backend::CrosstermBackend,
+    layout::Constraint,
+    style::{Modifier, Style},
+    text::Span,
+    widgets::{Block, Row, Table},
+    Terminal,
 };
 
 use asciime_filter::{charset, AsciiFilter, AsciiMap, AsciiMode, GlyphMapBuilder, StreamProcessor};
@@ -106,7 +116,10 @@ impl From<KeyEvent> for Event {
 }
 
 struct AppState<'ascii, 'cap, 'out> {
+    source: String,
+    sink: String,
     nbits: u32,
+    chars: Vec<char>,
     ascii_filter: AsciiFilter<'ascii>,
     stream: StreamProcessor<'cap, 'out, AsciiFilter<'ascii>>,
     enabled: bool,
@@ -117,19 +130,21 @@ impl AppState<'_, '_, '_> {
     fn from_opts(opts: Opts) -> anyhow::Result<Self> {
         let nbits = opts.nbits;
         let chars = charset(nbits).context("No charset for that number of bits")?;
-        println!("charset: {}", chars.iter().collect::<String>());
         let glyphs = GlyphMapBuilder::new(&chars)
             .with_font_or_default(opts.font)
             .with_size_or_default(opts.font_size)
             .build()?;
-        let ascii_map = AsciiMap::new(chars);
+        let ascii_map = AsciiMap::new(chars.clone());
 
         let ascii_filter = AsciiFilter::new(ascii_map, glyphs, opts.mode.into());
         let stream =
             StreamProcessor::new(&opts.source, &opts.sink)?.add_filter(ascii_filter.clone());
 
         Ok(Self {
+            source: opts.source,
+            sink: opts.sink,
             nbits,
+            chars,
             ascii_filter,
             stream,
             enabled: true,
@@ -184,7 +199,8 @@ impl AppState<'_, '_, '_> {
         if let Some(chars) = charset(new_nbits) {
             self.redraw = true;
             self.nbits = new_nbits;
-            self.ascii_filter = self.ascii_filter.set_charset(chars);
+            self.ascii_filter = self.ascii_filter.set_charset(chars.clone());
+            self.chars = chars;
             if self.enabled {
                 self.stream = self
                     .stream
@@ -194,6 +210,18 @@ impl AppState<'_, '_, '_> {
         }
         self
     }
+
+    #[must_use]
+    fn font_size(&self) -> u32 {
+        let (w, h) = self.ascii_filter.size();
+        debug_assert!(w == h, "{} != {}", w, h);
+        w
+    }
+
+    #[must_use]
+    const fn mode(&self) -> AsciiMode {
+        self.ascii_filter.mode()
+    }
 }
 
 fn main() -> anyhow::Result<()> {
@@ -201,6 +229,11 @@ fn main() -> anyhow::Result<()> {
     let mut app = AppState::from_opts(opts)?;
 
     enable_raw_mode().context("Failed to enable raw mode")?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend).context("Failed to create terminal")?;
+
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || loop {
         if let Ok(TEvent::Key(key)) = event::read() {
@@ -230,8 +263,42 @@ fn main() -> anyhow::Result<()> {
                 _ => {}
             }
         }
+        if app.redraw {
+            terminal
+                .draw(|frame| {
+                    let status = if app.enabled { "Enabled" } else { "Disabled" };
+                    let mode = match app.mode() {
+                        AsciiMode::Grayscale => "grayscale",
+                        AsciiMode::Color => "color",
+                    };
+                    let font_size = app.font_size().to_string();
+                    let nbits = app.nbits.to_string();
+                    let chars = app.chars.iter().collect::<String>().replace(' ', "␣");
+
+                    let size = frame.size();
+                    let params = Table::new(vec![
+                        Row::new(vec!["capture:", &app.source]),
+                        Row::new(vec!["output:", &app.sink]),
+                        Row::new(vec!["status (<SPACE>):", status]),
+                        Row::new(vec!["mode (⏎):", mode]),
+                        Row::new(vec!["size (+/-):", &font_size]),
+                        Row::new(vec!["bit depth (⬅/➡):", &nbits]),
+                        Row::new(vec!["charset:", &chars]),
+                    ])
+                    .block(Block::default().title(Span::styled(
+                        "Parameters (Controls)",
+                        Style::default().add_modifier(Modifier::BOLD),
+                    )))
+                    .widths(&[Constraint::Length(17), Constraint::Length(64)]);
+
+                    frame.render_widget(params, size);
+                })
+                .context("Failed to write to terminal")?;
+            app.redraw = false;
+        }
     }
 
     disable_raw_mode().context("Failed to disable raw mode")?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     Ok(())
 }

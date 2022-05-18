@@ -502,9 +502,19 @@ impl<'font> AsciiFilter<'font> {
     }
 
     #[must_use]
+    pub const fn mode(&self) -> AsciiMode {
+        self.mode
+    }
+
+    #[must_use]
     pub fn resize(mut self, inc: i32) -> Self {
         self.glyphs = self.glyphs.resize(inc);
         self
+    }
+
+    #[must_use]
+    pub const fn size(&self) -> (u32, u32) {
+        (self.glyphs.width, self.glyphs.height)
     }
 
     #[must_use]
@@ -565,11 +575,6 @@ where
     F: FrameFilter,
 {
     pub fn new(source: &str, sink: &str) -> anyhow::Result<Self> {
-        println!(
-            "Using capture device: {}\nUsing output device: {}\n",
-            source, sink
-        );
-
         // Prepare capture and output devices
         let cap = Device::with_path(source).context("Failed to open capture device")?;
         let out = Device::with_path(sink).context("Failed to open output device")?;

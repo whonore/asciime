@@ -13,7 +13,7 @@ rec {
       pname = "asciime";
       version = "0.1.0";
       src = pkgs.lib.cleanSource ./.;
-      cargoSha256 = "sha256-MeSyBpWn5lIaK9ull9s6gPr/1822VwbSzTF+M7NBIgE=";
+      cargoSha256 = "sha256-4Qi/Ql9nVLjSIpwAIt7YlmZJFzhsbTNyWQO+ckUO6vE=";
 
       nativeBuildInputs = [pkgs.rustPlatform.bindgenHook];
 
