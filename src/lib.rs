@@ -28,7 +28,7 @@ use v4l::{
     format::fourcc::FourCC,
     io::traits::{CaptureStream, OutputStream},
     prelude::*,
-    video::{Capture, Output},
+    video::{output::Parameters as OutputParameters, Capture, Output},
 };
 
 // $@B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/\|()1{}[]?-_+~<>i!lI;:,"^`'.
@@ -566,7 +566,7 @@ where
 {
     pub fn new(source: &str, sink: &str) -> anyhow::Result<Self> {
         println!(
-            "Using source device: {}\nUsing sink device: {}\n",
+            "Using capture device: {}\nUsing output device: {}\n",
             source, sink
         );
 
@@ -580,19 +580,30 @@ where
         let cap_fmt =
             Capture::set_format(&cap, &cap_fmt).context("Failed to set capture format")?;
         let out_fmt = Output::set_format(&out, &cap_fmt).context("Failed to set output format")?;
+        let cap_params = Capture::params(&cap).context("Failed to read capture parameters")?;
+        let out_params = Output::set_params(&out, &OutputParameters::new(cap_params.interval))
+            .context("Failed to set output parameters")?;
 
         if cap_fmt.fourcc.str()? != "YUYV" {
-            return Err(anyhow!("Invalid fourcc: {}", cap_fmt.fourcc.str().unwrap()));
+            return Err(anyhow!(
+                "Unsupported fourcc: {}",
+                cap_fmt.fourcc.str().unwrap()
+            ));
         }
 
         if cap_fmt.width != out_fmt.width
             || cap_fmt.height != out_fmt.height
             || cap_fmt.fourcc != out_fmt.fourcc
+            || cap_params.interval.numerator != out_params.interval.numerator
+            || cap_params.interval.denominator != out_params.interval.denominator
         {
             return Err(anyhow!(
-                "Output format does not match capture:\nCapture format: {}\nOutput format: {}",
+                "Output parameters do not match capture:\n\
+                 Capture device:\n{}{}\nOutput device:\n{}{}",
                 cap_fmt,
-                out_fmt
+                cap_params,
+                out_fmt,
+                out_params,
             ));
         }
 
@@ -600,12 +611,12 @@ where
             "Capture device:\n{}{}{}\nOutput device:\n{}{}{}",
             cap.query_caps()
                 .context("Failed to read capture capabilities")?,
-            Capture::format(&cap).context("Failed to read capture format")?,
-            Capture::params(&cap).context("Failed to read capture parameters")?,
+            cap_fmt,
+            cap_params,
             out.query_caps()
                 .context("Failed to read output capabilities")?,
-            Output::format(&out).context("Failed to read output format")?,
-            Output::params(&out).context("Failed to read output parameters")?
+            out_fmt,
+            out_params,
         );
 
         // Prepare capture and output streams
