@@ -105,22 +105,100 @@ impl From<KeyEvent> for Event {
     }
 }
 
+struct AppState<'ascii, 'cap, 'out> {
+    nbits: u32,
+    ascii_filter: AsciiFilter<'ascii>,
+    stream: StreamProcessor<'cap, 'out, AsciiFilter<'ascii>>,
+    enabled: bool,
+    redraw: bool,
+}
+
+impl AppState<'_, '_, '_> {
+    fn from_opts(opts: Opts) -> anyhow::Result<Self> {
+        let nbits = opts.nbits;
+        let chars = charset(nbits).context("No charset for that number of bits")?;
+        println!("charset: {}", chars.iter().collect::<String>());
+        let glyphs = GlyphMapBuilder::new(&chars)
+            .with_font_or_default(opts.font)
+            .with_size_or_default(opts.font_size)
+            .build()?;
+        let ascii_map = AsciiMap::new(chars);
+
+        let ascii_filter = AsciiFilter::new(ascii_map, glyphs, opts.mode.into());
+        let stream =
+            StreamProcessor::new(&opts.source, &opts.sink)?.add_filter(ascii_filter.clone());
+
+        Ok(Self {
+            nbits,
+            ascii_filter,
+            stream,
+            enabled: true,
+            redraw: true,
+        })
+    }
+
+    #[must_use]
+    fn toggle(mut self) -> Self {
+        self.redraw = true;
+        self.stream = if self.enabled {
+            self.stream.clear_filters()
+        } else {
+            self.stream.add_filter(self.ascii_filter.clone())
+        };
+        self.enabled = !self.enabled;
+        self
+    }
+
+    #[must_use]
+    fn cycle_mode(mut self) -> Self {
+        self.redraw = true;
+        self.ascii_filter = self.ascii_filter.cycle_mode();
+        if self.enabled {
+            self.stream = self
+                .stream
+                .clear_filters()
+                .add_filter(self.ascii_filter.clone());
+        }
+        self
+    }
+
+    #[must_use]
+    fn change_size(mut self, inc: i32) -> Self {
+        self.redraw = true;
+        self.ascii_filter = self.ascii_filter.resize(inc);
+        if self.enabled {
+            self.stream = self
+                .stream
+                .clear_filters()
+                .add_filter(self.ascii_filter.clone());
+        }
+        self
+    }
+
+    #[must_use]
+    fn change_bitdepth(mut self, moreless: MoreLess) -> Self {
+        let new_nbits = match moreless {
+            MoreLess::More => self.nbits + 1,
+            MoreLess::Less => self.nbits - 1,
+        };
+        if let Some(chars) = charset(new_nbits) {
+            self.redraw = true;
+            self.nbits = new_nbits;
+            self.ascii_filter = self.ascii_filter.set_charset(chars);
+            if self.enabled {
+                self.stream = self
+                    .stream
+                    .clear_filters()
+                    .add_filter(self.ascii_filter.clone());
+            }
+        }
+        self
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     let opts = Opts::parse();
-
-    let mut nbits = opts.nbits;
-    let chars = charset(nbits).context("No charset for that number of bits")?;
-    println!("charset: {}", chars.iter().collect::<String>());
-    let glyphs = GlyphMapBuilder::new(&chars)
-        .with_font_or_default(opts.font)
-        .with_size_or_default(opts.font_size)
-        .build()?;
-    let ascii_map = AsciiMap::new(chars);
-
-    let mut enabled = true;
-    let mut ascii_filter = AsciiFilter::new(ascii_map, glyphs, opts.mode.into());
-    let mut stream =
-        StreamProcessor::new(&opts.source, &opts.sink)?.add_filter(ascii_filter.clone());
+    let mut app = AppState::from_opts(opts)?;
 
     enable_raw_mode().context("Failed to enable raw mode")?;
     let (tx, rx) = mpsc::channel();
@@ -131,44 +209,23 @@ fn main() -> anyhow::Result<()> {
     });
 
     loop {
-        stream.process_frame()?;
+        app.stream.process_frame()?;
         if let Ok(ev) = rx.try_recv() {
             match ev {
                 Event::Quit => {
                     break;
                 }
                 Event::Toggle => {
-                    stream = if enabled {
-                        stream.clear_filters()
-                    } else {
-                        stream.add_filter(ascii_filter.clone())
-                    };
-                    enabled = !enabled;
+                    app = app.toggle();
                 }
                 Event::CycleMode => {
-                    ascii_filter = ascii_filter.cycle_mode();
-                    if enabled {
-                        stream = stream.clear_filters().add_filter(ascii_filter.clone());
-                    }
+                    app = app.cycle_mode();
                 }
                 Event::ChangeSize(inc) => {
-                    ascii_filter = ascii_filter.resize(inc);
-                    if enabled {
-                        stream = stream.clear_filters().add_filter(ascii_filter.clone());
-                    }
+                    app = app.change_size(inc);
                 }
                 Event::ChangeBitdepth(moreless) => {
-                    let new_nbits = match moreless {
-                        MoreLess::More => nbits + 1,
-                        MoreLess::Less => nbits - 1,
-                    };
-                    if let Some(chars) = charset(new_nbits) {
-                        nbits = new_nbits;
-                        ascii_filter = ascii_filter.set_charset(chars);
-                        if enabled {
-                            stream = stream.clear_filters().add_filter(ascii_filter.clone());
-                        }
-                    }
+                    app = app.change_bitdepth(moreless);
                 }
                 _ => {}
             }
