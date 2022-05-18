@@ -637,9 +637,9 @@ where
 
     pub fn process_frame(&mut self) -> anyhow::Result<()> {
         // Get the next frame
-        let (buf_in, _) =
+        let (buf_in, meta_in) =
             CaptureStream::next(&mut self.cap_stream).context("Failed to read capture frame")?;
-        let (buf_out, _) =
+        let (buf_out, meta_out) =
             OutputStream::next(&mut self.out_stream).context("Failed to read output frame")?;
 
         // Process the frame
@@ -652,6 +652,12 @@ where
         // Output the processed frame
         let buf_out = &mut buf_out[..buf_in.len()];
         buf_out.copy_from_slice(frame.as_bytes());
+
+        // Set metadata
+        // https://www.kernel.org/doc/html/v4.15/media/uapi/v4l/buffer.html#struct-v4l2-buffer
+        meta_out.field = 0;
+        meta_out.bytesused = meta_in.bytesused;
+
         Ok(())
     }
 }
