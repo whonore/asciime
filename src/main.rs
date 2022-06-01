@@ -118,19 +118,19 @@ impl From<KeyEvent> for Event {
     }
 }
 
-struct AppState<'ascii, 'cap, 'out> {
+struct AppState<'cap, 'out> {
     source: String,
     sink: String,
     nbits: u32,
     chars: Vec<char>,
-    ascii_filter: AsciiFilter<'ascii>,
-    stream: StreamProcessor<'cap, 'out, AsciiFilter<'ascii>>,
+    ascii_filter: AsciiFilter<'static>,
+    stream: StreamProcessor<'cap, 'out>,
     interactive: bool,
     enabled: bool,
     redraw: bool,
 }
 
-impl AppState<'_, '_, '_> {
+impl AppState<'_, '_> {
     fn from_opts(opts: Opts) -> anyhow::Result<Self> {
         let nbits = opts.nbits;
         let chars = charset(nbits).context("No charset for that number of bits")?;
@@ -141,8 +141,8 @@ impl AppState<'_, '_, '_> {
         let ascii_map = AsciiMap::new(chars.clone());
 
         let ascii_filter = AsciiFilter::new(ascii_map, glyphs, opts.mode.into());
-        let stream =
-            StreamProcessor::new(&opts.source, &opts.sink)?.add_filter(ascii_filter.clone());
+        let stream = StreamProcessor::new(&opts.source, &opts.sink)?
+            .add_filter(Box::new(ascii_filter.clone()));
 
         Ok(Self {
             source: opts.source,
@@ -163,7 +163,7 @@ impl AppState<'_, '_, '_> {
         self.stream = if self.enabled {
             self.stream.clear_filters()
         } else {
-            self.stream.add_filter(self.ascii_filter.clone())
+            self.stream.add_filter(Box::new(self.ascii_filter.clone()))
         };
         self.enabled = !self.enabled;
         self
@@ -177,7 +177,7 @@ impl AppState<'_, '_, '_> {
             self.stream = self
                 .stream
                 .clear_filters()
-                .add_filter(self.ascii_filter.clone());
+                .add_filter(Box::new(self.ascii_filter.clone()));
         }
         self
     }
@@ -190,7 +190,7 @@ impl AppState<'_, '_, '_> {
             self.stream = self
                 .stream
                 .clear_filters()
-                .add_filter(self.ascii_filter.clone());
+                .add_filter(Box::new(self.ascii_filter.clone()));
         }
         self
     }
@@ -210,7 +210,7 @@ impl AppState<'_, '_, '_> {
                 self.stream = self
                     .stream
                     .clear_filters()
-                    .add_filter(self.ascii_filter.clone());
+                    .add_filter(Box::new(self.ascii_filter.clone()));
             }
         }
         self

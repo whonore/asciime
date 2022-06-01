@@ -562,18 +562,15 @@ impl FrameFilter for AsciiFilter<'_> {
     }
 }
 
-pub struct StreamProcessor<'cap, 'out, F> {
+pub struct StreamProcessor<'cap, 'out> {
     cap_stream: MmapStream<'cap>,
     out_stream: MmapStream<'out>,
-    filters: Vec<F>,
+    filters: Vec<Box<dyn FrameFilter>>,
     width: u32,
     height: u32,
 }
 
-impl<F> StreamProcessor<'_, '_, F>
-where
-    F: FrameFilter,
-{
+impl StreamProcessor<'_, '_> {
     pub fn new(source: &str, sink: &str) -> anyhow::Result<Self> {
         // Prepare capture and output devices
         let cap = Device::with_path(source).context("Failed to open capture device")?;
@@ -640,7 +637,7 @@ where
     }
 
     #[must_use]
-    pub fn add_filter(mut self, filter: F) -> Self {
+    pub fn add_filter(mut self, filter: Box<dyn FrameFilter>) -> Self {
         self.filters.push(filter);
         self
     }
