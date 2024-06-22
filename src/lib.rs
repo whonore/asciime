@@ -90,7 +90,7 @@ impl RenderedGlyph {
             }
         }
 
-        debug_assert!(pts.iter().map(|(x, y, _)| (x, y)).all_unique(), "{:?}", pts);
+        debug_assert!(pts.iter().map(|(x, y, _)| (x, y)).all_unique(), "{pts:?}");
         debug_assert!(
             pts.len() == (scale * scale) as usize,
             "pts.len()={} scale={}",
@@ -249,13 +249,17 @@ impl AsciiMap {
             map.len(),
             nbits
         );
-        debug_assert!(nbits <= u8::BITS, "nbits={}", nbits);
+        debug_assert!(nbits <= u8::BITS, "nbits={nbits}");
         Self { map, nbits }
     }
 
     #[must_use]
     pub fn chars(&self) -> &[char] {
         &self.map
+    }
+
+    pub fn invert(&mut self) {
+        self.map.reverse();
     }
 }
 
@@ -400,7 +404,7 @@ impl Iterator for IterAvg<'_> {
                 .map(|(x, y)| u32::from(self.pixels.get_brightness(x, y).0))
                 .sum::<u32>()
                 / npix;
-            debug_assert!(avg <= u8::MAX.into(), "avg={}", avg);
+            debug_assert!(avg <= u8::MAX.into(), "avg={avg}");
             let ret = (self.x, self.y, Brightness(avg as u8));
 
             if next_x < self.pixels.width {
@@ -459,13 +463,14 @@ impl<'pix> Frame<'pix> {
 }
 
 pub trait FrameFilter {
-    fn process<'pix>(&self, frame: &mut Frame<'pix>);
+    fn process(&self, frame: &mut Frame<'_>);
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum AsciiMode {
     Grayscale,
     Color,
+    Invert,
 }
 
 impl AsciiMode {
@@ -473,7 +478,8 @@ impl AsciiMode {
     pub const fn next(self) -> Self {
         match self {
             Self::Grayscale => Self::Color,
-            Self::Color => Self::Grayscale,
+            Self::Color => Self::Invert,
+            Self::Invert => Self::Grayscale,
         }
     }
 }
@@ -487,7 +493,10 @@ pub struct AsciiFilter<'font> {
 
 impl<'font> AsciiFilter<'font> {
     #[must_use]
-    pub const fn new(ascii_map: AsciiMap, glyphs: GlyphMap<'font>, mode: AsciiMode) -> Self {
+    pub fn new(mut ascii_map: AsciiMap, glyphs: GlyphMap<'font>, mode: AsciiMode) -> Self {
+        if matches!(mode, AsciiMode::Invert) {
+            ascii_map.invert();
+        }
         Self {
             ascii_map,
             glyphs,
@@ -496,8 +505,12 @@ impl<'font> AsciiFilter<'font> {
     }
 
     #[must_use]
-    pub const fn cycle_mode(mut self) -> Self {
+    pub fn cycle_mode(mut self) -> Self {
+        let old_mode = self.mode;
         self.mode = self.mode.next();
+        if matches!(old_mode, AsciiMode::Invert) || matches!(self.mode, AsciiMode::Invert) {
+            self.ascii_map.invert();
+        }
         self
     }
 
@@ -526,12 +539,12 @@ impl<'font> AsciiFilter<'font> {
 }
 
 impl FrameFilter for AsciiFilter<'_> {
-    fn process<'pix>(&self, frame: &mut Frame<'pix>) {
+    fn process(&self, frame: &mut Frame<'_>) {
         let mut buf = frame.as_bytes().to_vec();
         let mut old_frame = Frame::new(&mut buf, frame.width(), frame.height());
         match self.mode {
             AsciiMode::Grayscale => frame.as_grayscale(),
-            AsciiMode::Color => {}
+            AsciiMode::Color | AsciiMode::Invert => {}
         }
 
         let mut subframes = frame.splitn(NSUBFRAMES);
@@ -554,7 +567,7 @@ impl FrameFilter for AsciiFilter<'_> {
                             .filter_map(move |(xoff, yoff, b)| {
                                 let x = x + xoff;
                                 let y = y + yoff;
-                                (x < width && y < height).then(|| (x, y, b))
+                                (x < width && y < height).then_some((x, y, b))
                             })
                     })
                     .for_each(|(x, y, b)| subframe.pixels.set_brightness(x, y, *b));

@@ -66,6 +66,7 @@ pub struct Opts {
 enum Mode {
     Grayscale,
     Color,
+    Invert,
 }
 
 impl From<Mode> for AsciiMode {
@@ -74,6 +75,7 @@ impl From<Mode> for AsciiMode {
         match mode {
             Mode::Grayscale => Self::Grayscale,
             Mode::Color => Self::Color,
+            Mode::Invert => Self::Invert,
         }
     }
 }
@@ -219,7 +221,7 @@ impl AppState<'_, '_> {
     #[must_use]
     fn font_size(&self) -> u32 {
         let (w, h) = self.ascii_filter.size();
-        debug_assert!(w == h, "{} != {}", w, h);
+        debug_assert!(w == h, "{w} != {h}");
         w
     }
 
@@ -284,6 +286,7 @@ fn main() -> anyhow::Result<()> {
                         let mode = match app.mode() {
                             AsciiMode::Grayscale => "grayscale",
                             AsciiMode::Color => "color",
+                            AsciiMode::Invert => "invert",
                         };
                         let font_size = app.font_size().to_string();
                         let nbits = app.nbits.to_string();
