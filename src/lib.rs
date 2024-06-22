@@ -44,7 +44,7 @@ const DEFAULT_FONT: &[u8] = include_bytes!("../font/FiraCode-VF.ttf");
 const DEFAULT_FONT_SCALE: u32 = 10;
 
 // TODO: Set this based on frame size
-const NSUBFRAMES: u32 = 4;
+const NSUBFRAME_SPLITS: u32 = 4;
 
 #[must_use]
 pub fn charset(nbits: u32) -> Option<Vec<char>> {
@@ -306,26 +306,13 @@ impl<'pix> Yuyv<'pix> {
 
     #[must_use]
     pub fn splitn(&mut self, n: u32) -> Vec<Yuyv<'_>> {
-        debug_assert!(self.height > 1);
         debug_assert!(n > 0);
-        let mut len = self.buf.len() / 2;
-        let mut height = self.height / 2;
-
-        let (sub1, sub2) = self.buf.split_at_mut(len);
-        let mut bufs = vec![sub1, sub2];
-        for _ in 1..n {
-            let mut new_bufs = vec![];
-            len /= 2;
-            height /= 2;
-            for buf in bufs {
-                let (subbuf1, subbuf2) = buf.split_at_mut(len);
-                new_bufs.push(subbuf1);
-                new_bufs.push(subbuf2);
-            }
-            bufs = new_bufs;
-        }
-        bufs.into_iter()
-            .map(|buf| Yuyv::new(buf, self.width, height))
+        debug_assert!(self.height % (2_u32.pow(n)) == 0);
+        let len = self.buf.len() >> n;
+        let height = self.height >> n;
+        self.buf
+            .chunks_exact_mut(len)
+            .map(|sub| Yuyv::new(sub, self.width, height))
             .collect()
     }
 
@@ -547,8 +534,8 @@ impl FrameFilter for AsciiFilter<'_> {
             AsciiMode::Color | AsciiMode::Invert => {}
         }
 
-        let mut subframes = frame.splitn(NSUBFRAMES);
-        let old_subframes = old_frame.splitn(NSUBFRAMES);
+        let mut subframes = frame.splitn(NSUBFRAME_SPLITS);
+        let old_subframes = old_frame.splitn(NSUBFRAME_SPLITS);
         subframes
             .par_iter_mut()
             .zip(old_subframes)
