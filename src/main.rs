@@ -54,7 +54,7 @@ pub struct Opts {
     #[clap(short = 's', long = "size")]
     /// Font size (pixels)
     font_size: Option<u32>,
-    #[clap(short = 'm', long = "mode", arg_enum, default_value_t = Mode::Color)]
+    #[clap(short = 'm', long = "mode", value_enum, default_value_t = Mode::Color)]
     /// Color mode
     mode: Mode,
     #[clap(short = 'I', long = "no-interactive")]
@@ -62,7 +62,7 @@ pub struct Opts {
     nointeractive: bool,
 }
 
-#[derive(Debug, Clone, Copy, clap::ArgEnum)]
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
 enum Mode {
     Grayscale,
     Color,
